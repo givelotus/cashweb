@@ -99,9 +99,9 @@ impl<'a> DbTopics<'a> {
 
         let payload_hash = message.payload_hash().as_slice().to_vec();
 
-        self.db
-            .rocksdb()
-            .put_cf(self.cf_payloads, &payload_hash, &buf)?;
+        let mut batch = rocksdb::WriteBatch::default();
+
+        batch.put_cf(self.cf_payloads, &payload_hash, &buf);
 
         for idx in 0..split_topic.len() + 1 {
             let base_topic_parts = split_topic[..idx].join(".");
@@ -114,10 +114,9 @@ impl<'a> DbTopics<'a> {
                 &payload_hash,
             ]
             .concat();
-            self.db
-                .rocksdb()
-                .put_cf(self.cf_messages, &topical_key, &payload_hash)?;
+            batch.put_cf(self.cf_messages, &topical_key, &payload_hash);
         }
+        self.db.write_batch(batch)?;
         Ok(())
     }
 
