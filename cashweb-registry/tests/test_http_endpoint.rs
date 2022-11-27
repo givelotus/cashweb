@@ -11,7 +11,10 @@ use bitcoinsuite_error::Result;
 use bitcoinsuite_test_utils::bin_folder;
 use bitcoinsuite_test_utils_blockchain::setup_bitcoind_coins;
 use cashweb_http_utils::protobuf::CONTENT_TYPE_PROTOBUF;
-use cashweb_payload::{payload::SignatureScheme, verify::build_commitment_script};
+use cashweb_payload::{
+    payload::SignatureScheme,
+    verify::{build_commitment_script, ADDRESS_METADATA_LOKAD_ID},
+};
 use cashweb_registry::{proto, test_instance::RegistryTestInstance};
 use pretty_assertions::assert_eq;
 use prost::Message;
