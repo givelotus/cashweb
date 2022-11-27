@@ -179,14 +179,14 @@ impl<'a> DbTopics<'a> {
 
     /// Get a specific message by payload hash.
     pub fn get_message(&self, payload_digest: &[u8]) -> Result<TopicPayload, DbTopicsError> {
-        match self.db.rocksdb().get_cf(self.cf_payloads, payload_digest)? {
-            Some(wrapper_bytes) => {
-                let proto =
-                    cashweb_payload::proto::SignedPayload::decode(wrapper_bytes.as_slice())?;
-                Ok(TopicPayload::parse_proto(&proto)?)
-            }
-            None => Err(DbTopicsError::MissingValue(hex::encode(payload_digest))),
-        }
+        let wrapper_bytes = self
+            .db
+            .rocksdb()
+            .get_cf(self.cf_payloads, payload_digest)?
+            .ok_or_else(|| DbTopicsError::MissingValue(hex::encode(payload_digest)))?;
+
+        let proto = cashweb_payload::proto::SignedPayload::decode(wrapper_bytes.as_slice())?;
+        Ok(TopicPayload::parse_proto(&proto)?)
     }
 
     pub(crate) fn add_cfs(columns: &mut Vec<ColumnFamilyDescriptor>) {
