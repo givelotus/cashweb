@@ -13,8 +13,8 @@ use crate::store::topics::DbTopics;
 // This makes it easier to keep cf names consistent and non-conflicting.
 pub(crate) const CF_METADATA: &str = "metadata";
 pub(crate) const CF_PKH_BY_TIME: &str = "pkh_by_time";
-pub(crate) const CF_MESSAGES: &str = "messages";
-pub(crate) const CF_PAYLOADS: &str = "payloads";
+pub(crate) const CF_MESSAGES: &str = "topic_messages";
+pub(crate) const CF_PAYLOADS: &str = "message_payloads";
 
 pub(crate) type CF = rocksdb::ColumnFamily;
 
