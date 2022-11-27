@@ -157,7 +157,11 @@ async fn test_registry_http() -> Result<()> {
             TxBuilderOutput::Leftover(address.script().clone()),
             TxBuilderOutput::Fixed(TxOutput {
                 value: burn_amount,
-                script: build_commitment_script(pubkey.array(), &payload_hash),
+                script: build_commitment_script(
+                    ADDRESS_METADATA_LOKAD_ID,
+                    pubkey.array(),
+                    &payload_hash,
+                ),
             }),
         ],
         lock_time: 0,
