@@ -5,8 +5,8 @@ use crate::{
     store::db::{Db, CF, CF_MESSAGES, CF_PAYLOADS},
 };
 use bitcoinsuite_core::{Hashed, Sha256};
-use bitcoinsuite_error::{ErrorMeta, Report, Result};
-use cashweb_payload::payload::{ParseSignedPayloadError, SignedPayload};
+use bitcoinsuite_error::{ErrorMeta, Result};
+use cashweb_payload::payload::SignedPayload;
 use prost::Message;
 use rocksdb::{ColumnFamilyDescriptor, Direction, IteratorMode};
 use std::fmt::Debug;
@@ -24,31 +24,6 @@ pub struct DbTopics<'a> {
 /// Errors indicating some registry topic error.
 #[derive(Debug, Error, ErrorMeta)]
 pub enum DbTopicsError {
-    /// Foo
-    #[critical()]
-    #[error("bitcoinsuite error: {0}")]
-    PayloadDecode(#[from] ParseSignedPayloadError),
-
-    /// Foo
-    #[critical()]
-    #[error("bitcoinsuite error: {0}")]
-    ReportError(#[from] Report),
-
-    /// Foo
-    #[critical()]
-    #[error("RocksDB error: {0}")]
-    RocksDB(#[from] rocksdb::Error),
-
-    /// Foo
-    #[critical()]
-    #[error("Prost encode error: {0}")]
-    ProstEncode(#[from] prost::EncodeError),
-
-    /// Foo
-    #[critical()]
-    #[error("Prost decode error: {0}")]
-    ProstDecode(#[from] prost::DecodeError),
-
     /// Foo
     #[critical()]
     #[error("Value not found in messages: {0}")]
@@ -84,17 +59,17 @@ impl<'a> DbTopics<'a> {
     }
 
     /// Put a serialized `Message` to database.
-    pub fn put_message(&self, timestamp: u64, message: &TopicPayload) -> Result<(), DbTopicsError> {
+    pub fn put_message(&self, timestamp: u64, message: &TopicPayload) -> Result<()> {
         let buf = message.to_proto().encode_to_vec();
 
         let topic = message.payload().topic.clone();
 
         let split_topic = topic.split('.').collect::<Vec<_>>();
         if split_topic.len() > 10 {
-            return Err(DbTopicsError::TopicTooLong(split_topic.len()));
+            return Err(DbTopicsError::TopicTooLong(split_topic.len()))?;
         }
         if split_topic.iter().any(|segment| segment.is_empty()) {
-            return Err(DbTopicsError::TopicInvalidSegments());
+            return Err(DbTopicsError::TopicInvalidSegments())?;
         }
 
         let payload_hash = message.payload_hash().as_slice().to_vec();
@@ -122,7 +97,7 @@ impl<'a> DbTopics<'a> {
 
     /// Replace a serialized `Message` to database. No need to update
     /// indexes as they are all pointing to this entry.
-    pub fn update_message(&self, message: &TopicPayload) -> Result<(), DbTopicsError> {
+    pub fn update_message(&self, message: &TopicPayload) -> Result<()> {
         let buf = message.to_proto().encode_to_vec();
 
         let payload_hash = message.payload_hash().as_slice().to_vec();
@@ -134,17 +109,12 @@ impl<'a> DbTopics<'a> {
     }
 
     /// Get serialized `messages` from database.
-    pub fn get_messages_to(
-        &self,
-        topic: &str,
-        from: i64,
-        to: i64,
-    ) -> Result<Vec<TopicPayload>, DbTopicsError> {
+    pub fn get_messages_to(&self, topic: &str, from: i64, to: i64) -> Result<Vec<TopicPayload>> {
         let valid_topic = topic
             .chars()
             .all(|c| c.is_lowercase() || c.is_numeric() || c == '.' || c == '-');
         if !valid_topic {
-            return Err(DbTopicsError::TopicInvalidCharacters());
+            return Err(DbTopicsError::TopicInvalidCharacters())?;
         }
 
         let topic_digest = Sha256::digest(topic.as_bytes().into()).as_slice().to_vec();
@@ -173,12 +143,12 @@ impl<'a> DbTopics<'a> {
     /// Get a vector of messages starting at some unix timestamp.
     /// TODO: actually use this
     #[allow(dead_code)]
-    pub fn get_messages(&self, topic: &str, from: i64) -> Result<Vec<TopicPayload>, DbTopicsError> {
+    pub fn get_messages(&self, topic: &str, from: i64) -> Result<Vec<TopicPayload>> {
         self.get_messages_to(topic, from, i64::MAX)
     }
 
     /// Get a specific message by payload hash.
-    pub fn get_message(&self, payload_digest: &[u8]) -> Result<TopicPayload, DbTopicsError> {
+    pub fn get_message(&self, payload_digest: &[u8]) -> Result<TopicPayload> {
         let wrapper_bytes = self
             .db
             .rocksdb()
