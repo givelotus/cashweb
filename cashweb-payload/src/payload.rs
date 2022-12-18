@@ -3,7 +3,8 @@
 use std::collections::HashSet;
 
 use bitcoinsuite_core::{
-    ecc::PUBKEY_LENGTH, lotus_txid, BitcoinCode, Bytes, Hashed, Sha256, Tx, TxOutput, UnhashedTx,
+    ecc::PUBKEY_LENGTH, lotus_txid, BitcoinCode, Bytes, Hashed, Sha256, Sha256d, Tx, TxOutput,
+    UnhashedTx,
 };
 use bitcoinsuite_error::{ErrorMeta, Result, WrapErr};
 use thiserror::Error;
@@ -277,18 +278,27 @@ impl<T: prost::Message + Default> SignedPayload<T> {
         &self.burn_txs
     }
 
+    /// Resets the burn transactions on this payload to a new set.
+    pub fn set_burn_txs(&mut self, burn_txs: Vec<BurnTx>) {
+        self.burn_amount = 0;
+        self.burn_txs = burn_txs;
+        for burn_tx in &self.burn_txs {
+            self.burn_amount += burn_tx.burn_output.value
+        }
+    }
+
     /// Add additional burn transactions to this signed payload to indicate
     /// additional burns that were added later by others.
     pub fn add_burn_txs<'a>(&mut self, burn_txs: &'a [BurnTx]) -> Vec<&'a BurnTx> {
-        let mut txid_set = HashSet::<Vec<u8>>::new();
+        let mut txid_set = HashSet::<Sha256d>::new();
 
         let mut new_burns = vec![];
         for burn_tx in &self.burn_txs {
-            let txid = lotus_txid(burn_tx.tx().unhashed_tx()).to_vec_be();
+            let txid = lotus_txid(burn_tx.tx().unhashed_tx());
             txid_set.insert(txid);
         }
         for burn_tx in burn_txs {
-            let txid = lotus_txid(burn_tx.tx().unhashed_tx()).to_vec_be();
+            let txid = lotus_txid(burn_tx.tx().unhashed_tx());
             if txid_set.contains(&txid) {
                 continue;
             }

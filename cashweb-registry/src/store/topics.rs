@@ -2,13 +2,13 @@
 
 use crate::{
     proto,
-    store::db::{Db, CF, CF_MESSAGES, CF_PAYLOADS},
+    store::db::{Db, CF, CF_MESSAGES, CF_PAYLOADS, CF_TOPIC_BURNS},
 };
 use bitcoinsuite_core::{lotus_txid, Hashed, Sha256};
 use bitcoinsuite_error::{ErrorMeta, Result, WrapErr};
 use cashweb_payload::payload::SignedPayload;
 use prost::Message;
-use rocksdb::{ColumnFamilyDescriptor, Direction, IteratorMode};
+use rocksdb::{ColumnFamilyDescriptor, Direction, IteratorMode, Options};
 use std::fmt::Debug;
 use thiserror::Error;
 
@@ -57,7 +57,51 @@ pub enum DbTopicsError {
 }
 use self::DbTopicsError::*;
 
-use super::db::CF_BURNS;
+/// Support partial merge operations on full message payloads
+pub fn partial_merge_message(
+    _key: &[u8],
+    _existing_value: Option<&[u8]>,
+    _operands: &rocksdb::MergeOperands,
+) -> Option<Vec<u8>> {
+    None // or find a way to merge `operands` somehow
+}
+
+fn full_merge_message(
+    _key: &[u8],
+    existing_value: Option<&[u8]>,
+    operands: &rocksdb::MergeOperands,
+) -> Option<Vec<u8>> {
+    let mut signed_payloads: Vec<TopicPayload> = operands
+        .into_iter()
+        .map(|signed_payload| {
+            cashweb_payload::proto::SignedPayload::decode(signed_payload)
+                .map_or_else(|_err| None, |proto| TopicPayload::parse_proto(&proto).ok())
+        })
+        .filter_map(|item| item)
+        .collect();
+    // We want to use pop;
+    signed_payloads.reverse();
+
+    if signed_payloads.len() != operands.len() {
+        return None;
+    }
+
+    if let Some(existing_payload) = existing_value {
+        let payload = cashweb_payload::proto::SignedPayload::decode(existing_payload)
+            .map_or_else(|_err| None, |proto| TopicPayload::parse_proto(&proto).ok());
+
+        if let Some(payload) = payload {
+            signed_payloads.push(payload);
+        }
+    }
+
+    let new_payload = signed_payloads.into_iter().reduce(|mut merged, v| {
+        merged.add_burn_txs(v.txs());
+        merged
+    });
+
+    Some(new_payload.unwrap().to_proto().encode_to_vec())
+}
 
 /// Allows access to registry topics.
 impl<'a> DbTopics<'a> {
@@ -65,7 +109,7 @@ impl<'a> DbTopics<'a> {
     pub fn new(db: &'a Db) -> Self {
         let cf_messages = db.cf(CF_MESSAGES).unwrap();
         let cf_payloads = db.cf(CF_PAYLOADS).unwrap();
-        let cf_burns = db.cf(CF_BURNS).unwrap();
+        let cf_burns = db.cf(CF_TOPIC_BURNS).unwrap();
 
         DbTopics {
             db,
@@ -101,8 +145,7 @@ impl<'a> DbTopics<'a> {
             let mut found_message = possibly_existing_message.unwrap();
             new_burns.extend(found_message.add_burn_txs(message.txs()));
             // Update existing key.
-            // TODO: Implement merging here instead of doing an update in this way as there may be a database race.
-            batch.put_cf(
+            batch.merge_cf(
                 self.cf_payloads,
                 &payload_hash,
                 &message.to_proto().encode_to_vec(),
@@ -112,8 +155,6 @@ impl<'a> DbTopics<'a> {
             //
             batch.put_cf(self.cf_payloads, &payload_hash, &payload_buf);
         }
-        // TODO: We need to only update the topics w/ timestamp iff the burn txns are not yet in there.
-        let buf = message.to_proto_without_payload().encode_to_vec();
         for burn_tx in new_burns {
             let tx_id = lotus_txid(burn_tx.tx().unhashed_tx()).to_vec_be();
             // If we've already recorded an entry for this burn tx, don't record again.
@@ -122,17 +163,14 @@ impl<'a> DbTopics<'a> {
             }
             batch.put_cf(self.cf_burns, &tx_id, vec![]);
 
+            let mut partial_message = message.clone();
+            partial_message.set_burn_txs(vec![burn_tx.clone()]);
+            let buf = message.to_proto_without_payload().encode_to_vec();
             for idx in 0..split_topic.len() + 1 {
                 let base_topic_parts = split_topic[..idx].join(".");
-                let topic_digest = Sha256::digest(base_topic_parts.as_bytes().into())
-                    .as_slice()
-                    .to_vec();
-                let topical_key = [
-                    topic_digest.as_slice(),
-                    timestamp.to_be_bytes().as_ref(),
-                    tx_id.as_slice(),
-                ]
-                .concat();
+                let topic_digest = Sha256::digest(base_topic_parts.as_bytes().into()).to_vec_be();
+                let topical_key =
+                    [&topic_digest, timestamp.to_be_bytes().as_ref(), &tx_id].concat();
 
                 batch.put_cf(self.cf_messages, &topical_key, &buf);
             }
@@ -214,6 +252,13 @@ impl<'a> DbTopics<'a> {
     }
 
     pub(crate) fn add_cfs(columns: &mut Vec<ColumnFamilyDescriptor>) {
+        let mut options = Options::default();
+        options.set_merge_operator(
+            "topic-indexer.MergeIndex",
+            full_merge_message,
+            partial_merge_message,
+        );
+
         columns.push(ColumnFamilyDescriptor::new(
             CF_MESSAGES,
             rocksdb::Options::default(),
@@ -223,7 +268,7 @@ impl<'a> DbTopics<'a> {
             rocksdb::Options::default(),
         ));
         columns.push(ColumnFamilyDescriptor::new(
-            CF_BURNS,
+            CF_TOPIC_BURNS,
             rocksdb::Options::default(),
         ));
     }
