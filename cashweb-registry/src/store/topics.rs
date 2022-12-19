@@ -95,10 +95,12 @@ fn full_merge_message(
         }
     }
 
-    let new_payload = signed_payloads.into_iter().reduce(|mut merged, v| {
-        merged.add_burn_txs(v.txs());
-        merged
-    });
+    let new_payload = signed_payloads
+        .into_iter()
+        .reduce(|mut merged, new_payload| {
+            merged.add_burn_txs(new_payload.txs());
+            merged
+        });
 
     Some(new_payload.unwrap().to_proto().encode_to_vec())
 }
@@ -121,26 +123,13 @@ impl<'a> DbTopics<'a> {
 
     /// Put a serialized `Message` to database.
     pub fn put_message(&self, timestamp: u64, message: &TopicPayload) -> Result<()> {
-        let payload = message.payload().as_ref().ok_or(MissingPayload())?;
-        let topic = payload.topic.clone();
-
-        let split_topic = topic.split('.').collect::<Vec<_>>();
-        if split_topic.len() > 10 {
-            return Err(TopicTooLong(split_topic.len()))?;
-        }
-        if split_topic.iter().any(|segment| segment.is_empty()) {
-            return Err(TopicInvalidSegments())?;
-        }
-        let payload_hash = message.payload_hash().as_slice().to_vec();
-
-        // Update existing record if we have one.
-        // TODO: needs a key-level lock on this.
+        let payload_hash = message.payload_hash().as_slice();
         let possibly_existing_message = self.get_message(&payload_hash);
         let db = self.db.rocksdb();
-        let payload_buf = message.to_proto().encode_to_vec();
+        let wrapper_buf = message.to_proto().encode_to_vec();
         let mut batch = rocksdb::WriteBatch::default();
-
         let mut new_burns = vec![];
+        let topic;
         if possibly_existing_message.is_ok() {
             let mut found_message = possibly_existing_message.unwrap();
             new_burns.extend(found_message.add_burn_txs(message.txs()));
@@ -150,10 +139,29 @@ impl<'a> DbTopics<'a> {
                 &payload_hash,
                 &message.to_proto().encode_to_vec(),
             );
+            topic = found_message
+                .payload()
+                .as_ref()
+                .ok_or(MissingPayload())?
+                .topic
+                .clone()
         } else {
             new_burns.extend(message.txs());
-            //
-            batch.put_cf(self.cf_payloads, &payload_hash, &payload_buf);
+            batch.put_cf(self.cf_payloads, &payload_hash, &wrapper_buf);
+            topic = message
+                .payload()
+                .as_ref()
+                .ok_or(MissingPayload())?
+                .topic
+                .clone()
+        }
+
+        let split_topic = topic.split('.').collect::<Vec<_>>();
+        if split_topic.len() > 10 {
+            return Err(TopicTooLong(split_topic.len()))?;
+        }
+        if split_topic.iter().any(|segment| segment.is_empty()) {
+            return Err(TopicInvalidSegments())?;
         }
         for burn_tx in new_burns {
             let tx_id = lotus_txid(burn_tx.tx().unhashed_tx()).to_vec_be();
@@ -184,7 +192,7 @@ impl<'a> DbTopics<'a> {
     pub fn update_message(&self, message: &TopicPayload) -> Result<()> {
         let buf = message.to_proto().encode_to_vec();
 
-        let payload_hash = message.payload_hash().as_slice().to_vec();
+        let payload_hash = message.payload_hash().as_slice();
 
         // TODO: This should really use a merge operation that combines the burn_outputs.
         self.db
@@ -202,7 +210,7 @@ impl<'a> DbTopics<'a> {
             return Err(TopicInvalidCharacters())?;
         }
 
-        let topic_digest = Sha256::digest(topic.as_bytes().into()).as_slice().to_vec();
+        let topic_digest = Sha256::digest(topic.as_bytes().into()).to_vec_be();
         let start_prefix = [&topic_digest, from.to_be_bytes().as_ref()].concat();
         let end_prefix = [&topic_digest, to.to_be_bytes().as_ref()].concat();
 
@@ -252,9 +260,9 @@ impl<'a> DbTopics<'a> {
     }
 
     pub(crate) fn add_cfs(columns: &mut Vec<ColumnFamilyDescriptor>) {
-        let mut options = Options::default();
-        options.set_merge_operator(
-            "topic-indexer.MergeIndex",
+        let mut payload_mesage_opts = Options::default();
+        payload_mesage_opts.set_merge_operator(
+            "topic-message.MergeMessages",
             full_merge_message,
             partial_merge_message,
         );
@@ -265,7 +273,7 @@ impl<'a> DbTopics<'a> {
         ));
         columns.push(ColumnFamilyDescriptor::new(
             CF_PAYLOADS,
-            rocksdb::Options::default(),
+            payload_mesage_opts,
         ));
         columns.push(ColumnFamilyDescriptor::new(
             CF_TOPIC_BURNS,
@@ -417,6 +425,45 @@ mod tests {
             message_two.payload_hash(),
             data_wrapper_four[1].payload_hash()
         );
+
+        let tx3 = UnhashedTx {
+            version: 1,
+            inputs: vec![],
+            outputs: vec![TxOutput {
+                value: 1_000_000,
+                script: Script::default(),
+            }],
+            lock_time: 1, // Ensure hash is different
+        };
+        // Try merging a message
+        let message_one_upvote =
+            TopicPayload::parse_proto(&cashweb_payload::proto::SignedPayload {
+                pubkey: vec![2; 33],
+                sig: vec![], // invalid sig
+                sig_scheme: SignatureScheme::Ecdsa.into(),
+                payload: vec![], // invalid payload
+                payload_hash: payload_hash_one.clone(),
+                burn_amount: 1_000_000,
+                burn_txs: vec![cashweb_payload::proto::BurnTx {
+                    tx: tx3.ser().to_vec(),
+                    burn_idx: 0,
+                }],
+            })?;
+
+        database.put_message(4, &message_one_upvote)?;
+
+        let upvoted_wrapper = database.get_messages("foo.bar.bob", 0)?;
+        assert_eq!(upvoted_wrapper.len(), 2);
+        assert_eq!(
+            message_one.payload_hash(),
+            upvoted_wrapper[1].payload_hash()
+        );
+        assert_eq!(
+            message_one.payload_hash(),
+            upvoted_wrapper[0].payload_hash()
+        );
+        let merged_message = database.get_message(&upvoted_wrapper[1].payload_hash().as_slice())?;
+        assert_eq!(merged_message.txs().len(), 2);
 
         // Destroy database
         Ok(())
