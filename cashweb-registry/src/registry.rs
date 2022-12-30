@@ -63,7 +63,7 @@ pub enum PutBlockchainAction {
     Broadcast,
 }
 
-/// Result of putting metadata into the registry.
+/// Result of putting a topic message into the registry.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PutMessageResult {
     /// Transaction IDs of the burn txs for this payload.
