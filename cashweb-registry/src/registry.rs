@@ -1275,7 +1275,7 @@ mod tests {
         );
         let mut message_two = registry.get_message(signed_message.payload_hash.clone())?;
         assert_eq!(message_two, SignedPayload::parse_proto(&signed_message)?,);
-        // Malleate tx, will result in a different txid, but same raw tx hex
+        // Malleate tx, will result in the same txid, but diffrent raw tx hex
         let (signed_message, tx) = build_signed_message(proto::BroadcastMessage {
             timestamp: 1237,
             topic: "your.mom".to_string(),
