@@ -9,7 +9,7 @@ use futures::{FutureExt, StreamExt};
 use rand::Rng;
 
 use crate::{
-    http::server::PutMetadataRequest,
+    http::server::{PutMessageRequest, PutMetadataRequest},
     p2p::{peer::Peer, relay_info::RelayInfo},
     proto,
     registry::{Registry, RegistryError},
@@ -51,6 +51,15 @@ impl Peers {
                 &self.own_origin,
                 &self.client,
             )
+        }))
+        .await;
+    }
+
+    /// Relay the metadata to all the peers.
+    /// It will not forward to peers that (probably) already know the payload.
+    pub async fn relay_message(&self, relay_info: &RelayInfo, request: &PutMessageRequest) {
+        futures::future::join_all(self.peers.iter().map(|peer| {
+            peer.relay_message_to(relay_info, request, &self.own_origin, &self.client)
         }))
         .await;
     }
