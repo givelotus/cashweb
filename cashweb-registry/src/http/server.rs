@@ -92,7 +92,6 @@ impl RegistryServer {
             .layer(Extension(self))
             .layer(
                 CorsLayer::new()
-                    // allow `GET` and `POST` when accessing the resource
                     .allow_methods([
                         Method::GET,
                         Method::PUT,
