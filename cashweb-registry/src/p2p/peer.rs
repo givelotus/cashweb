@@ -559,6 +559,7 @@ mod tests {
                             sig: vec![],
                             sig_scheme: SignatureScheme::Ecdsa as i32,
                             payload: proto::AddressMetadata {
+                                pubkey: vec![0; 33],
                                 timestamp: 1234,
                                 ttl: 10,
                                 entries: vec![],
@@ -694,6 +695,7 @@ mod tests {
                         sig: vec![],
                         sig_scheme: SignatureScheme::Ecdsa as i32,
                         payload: proto::AddressMetadata {
+                            pubkey: vec![0; 33],
                             timestamp: 1234,
                             ttl: 10,
                             entries: vec![],

@@ -95,6 +95,7 @@ async fn test_imd() -> Result<()> {
         for (instance_idx, instance) in instances.iter().enumerate().take(num_instances - 1) {
             // Build valid address metadata
             let address_metadata = proto::AddressMetadata {
+                pubkey: pubkey.array().to_vec(),
                 timestamp: 1000 + instance_idx as i64,
                 ttl: 10,
                 entries: vec![],

@@ -95,6 +95,10 @@ pub enum RegistryError {
         /// Actual hash of the provided pubkey.
         actual: PubKeyHash,
     },
+    /// Pubkey in signed payload does not match pubkey in metadata.
+    #[invalid_client_input()]
+    #[error("Pubkey in the address metadata not match signer pubkey")]
+    PubKeyMismatch {},
 
     /// Timestamps in the address payload must increase monotonically.
     /// Otherwise, attackers could re-submit old SignedPayloads and make them go back in time.
@@ -185,8 +189,6 @@ impl Registry {
         let signed_metadata =
             SignedPayload::<proto::AddressMetadata>::parse_proto(signed_metadata)?;
 
-        let new_payload = signed_metadata.payload().as_ref().ok_or(PayloadMissing)?;
-
         // Check pubkey hash
         let actual_pkh = pkh.algorithm().hash_pubkey(*signed_metadata.pubkey());
         if pkh != actual_pkh {
@@ -195,6 +197,10 @@ impl Registry {
                 actual: actual_pkh,
             }
             .into());
+        }
+        let new_payload = signed_metadata.payload().as_ref().ok_or(PayloadMissing)?;
+        if new_payload.pubkey != signed_metadata.pubkey() {
+            return Err(PubKeyMismatch {}.into());
         }
 
         // Verify burn amount and signatures check out
@@ -538,6 +544,7 @@ mod tests {
 
         // Tx parses, but the output burn_index points to doesn't exist
         let address_metadata = proto::AddressMetadata {
+            pubkey: pubkey.array().to_vec(),
             timestamp: 1234,
             ttl: 10,
             entries: vec![],
@@ -548,11 +555,7 @@ mod tests {
             inputs: vec![],
             outputs: vec![TxOutput {
                 value: 1_000_000,
-                script: build_commitment_script(
-                    ADDRESS_METADATA_LOKAD_ID,
-                    pubkey.array(),
-                    &payload_hash,
-                ),
+                script: build_commitment_script(ADDRESS_METADATA_LOKAD_ID, &payload_hash),
             }],
             lock_time: 0,
         };
@@ -717,11 +720,7 @@ mod tests {
                     TxBuilderOutput::Leftover(address.script().clone()),
                     TxBuilderOutput::Fixed(TxOutput {
                         value: burn_amount,
-                        script: build_commitment_script(
-                            ADDRESS_METADATA_LOKAD_ID,
-                            pubkey.array(),
-                            &payload_hash,
-                        ),
+                        script: build_commitment_script(ADDRESS_METADATA_LOKAD_ID, &payload_hash),
                     }),
                 ],
                 lock_time: 0,
@@ -734,6 +733,7 @@ mod tests {
         };
 
         let (signed_metadata, _) = build_signed_metadata(proto::AddressMetadata {
+            pubkey: pubkey.array().to_vec(),
             timestamp: 1234,
             ttl: 10,
             entries: vec![proto::AddressEntry {
@@ -757,6 +757,7 @@ mod tests {
 
         // With more recent timestamp, it succeeds.
         let (signed_metadata, tx) = build_signed_metadata(proto::AddressMetadata {
+            pubkey: pubkey.array().to_vec(),
             timestamp: 1235,
             ttl: 10,
             entries: vec![],
@@ -777,6 +778,7 @@ mod tests {
         );
 
         let (signed_metadata, tx) = build_signed_metadata(proto::AddressMetadata {
+            pubkey: pubkey.array().to_vec(),
             timestamp: 1236,
             ttl: 10,
             entries: vec![],
@@ -806,6 +808,7 @@ mod tests {
 
         // Malleate tx, will result in a different txid, but same raw tx hex
         let (mut signed_metadata, tx) = build_signed_metadata(proto::AddressMetadata {
+            pubkey: pubkey.array().to_vec(),
             timestamp: 1237,
             ttl: 10,
             entries: vec![],
@@ -841,6 +844,7 @@ mod tests {
             let mut found_any_race_condition = false;
             for i in 3..95 {
                 let (signed_metadata, tx) = build_signed_metadata(proto::AddressMetadata {
+                    pubkey: pubkey.array().to_vec(),
                     timestamp: 1234 + i,
                     ttl: 10,
                     entries: vec![],
@@ -948,6 +952,7 @@ mod tests {
 
             // Build valid address metadata
             let address_metadata = proto::AddressMetadata {
+                pubkey: pubkey.array().to_vec(),
                 timestamp,
                 ttl: 10,
                 entries: vec![],
@@ -962,11 +967,7 @@ mod tests {
                 &anyone_script,
                 vec![TxOutput {
                     value: burn_amount,
-                    script: build_commitment_script(
-                        ADDRESS_METADATA_LOKAD_ID,
-                        pubkey.array(),
-                        &payload_hash,
-                    ),
+                    script: build_commitment_script(ADDRESS_METADATA_LOKAD_ID, &payload_hash),
                 }],
             );
 
@@ -1091,11 +1092,7 @@ mod tests {
             inputs: vec![],
             outputs: vec![TxOutput {
                 value: 1_000_000,
-                script: build_commitment_script(
-                    BROADCAST_MESSAGE_LOKAD_ID,
-                    pubkey.array(),
-                    &payload_hash,
-                ),
+                script: build_commitment_script(BROADCAST_MESSAGE_LOKAD_ID, &payload_hash),
             }],
             lock_time: 0,
         };
@@ -1236,11 +1233,7 @@ mod tests {
                     TxBuilderOutput::Leftover(address.script().clone()),
                     TxBuilderOutput::Fixed(TxOutput {
                         value: burn_amount,
-                        script: build_commitment_script(
-                            BROADCAST_MESSAGE_LOKAD_ID,
-                            pubkey.array(),
-                            &payload_hash,
-                        ),
+                        script: build_commitment_script(BROADCAST_MESSAGE_LOKAD_ID, &payload_hash),
                     }),
                 ],
                 lock_time: 0,

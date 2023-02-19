@@ -118,11 +118,7 @@ pub fn build_signed_metadata(
         redeem_script,
         vec![TxOutput {
             value: burn_amount,
-            script: build_commitment_script(
-                ADDRESS_METADATA_LOKAD_ID,
-                pubkey.array(),
-                &payload_hash,
-            ),
+            script: build_commitment_script(ADDRESS_METADATA_LOKAD_ID, &payload_hash),
         }],
     );
 

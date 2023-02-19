@@ -102,6 +102,7 @@ async fn test_p2p() -> Result<()> {
         &mut utxos,
         &anyone_script,
         proto::AddressMetadata {
+            pubkey: pubkey.array().to_vec(),
             timestamp: 1234,
             ttl: 10,
             entries: vec![],
