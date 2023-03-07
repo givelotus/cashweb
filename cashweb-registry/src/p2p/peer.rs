@@ -12,7 +12,11 @@ use reqwest::{
     StatusCode,
 };
 
-use crate::{http::server::PutMetadataRequest, p2p::relay_info::RelayInfo, proto};
+use crate::{
+    http::server::{PutMessageRequest, PutMetadataRequest},
+    p2p::relay_info::RelayInfo,
+    proto,
+};
 
 /// A single registry peer.
 #[derive(Debug)]
@@ -146,6 +150,66 @@ impl Peer {
         RelayAction::Success
     }
 
+    /// Relay the PUT metadata request to the peer.
+    /// Skips sending if request originated from this peer, or if it (probably) already knows it.
+    pub async fn relay_message_to(
+        &self,
+        relay_info: &RelayInfo,
+        request: &PutMessageRequest,
+        own_origin: &str,
+        client: &reqwest::Client,
+    ) -> RelayAction {
+        use prost::Message;
+        let mut state = self.state.lock().await;
+        let tx_ids = &request.tx_ids;
+        // We add TXIDs instead of payloads here because the signed payload can
+        // be updated in the case of broadcast messages.
+        if self.should_skip_relay(relay_info) {
+            tx_ids
+                .into_iter()
+                .for_each(|tx_id| state.add_known_payload(&tx_id));
+            return RelayAction::SkippedOrigin;
+        }
+        if tx_ids
+            .into_iter()
+            .all(|tx_id| (state.knows_payload(&tx_id)))
+        {
+            return RelayAction::KnowsPayload;
+        }
+        let response = client
+            .put(format!("{}message", self.url))
+            .header(CONTENT_TYPE, CONTENT_TYPE_PROTOBUF)
+            .header(ORIGIN, own_origin)
+            .body(request.signed_message.encode_to_vec())
+            .send()
+            .await;
+        let response = match response {
+            Ok(response) => response,
+            Err(err) => {
+                state.last_error = Some(err.into());
+                return RelayAction::SendError;
+            }
+        };
+        let status = response.status();
+        state.last_status = Some(status);
+        let response = match response.bytes().await {
+            Ok(response) => response,
+            Err(err) => {
+                state.last_error = Some(err.into());
+                return RelayAction::ResponseError;
+            }
+        };
+        state.last_http_response = Some(response.to_vec());
+        state.last_error = None;
+        if status != StatusCode::OK {
+            return RelayAction::HttpError;
+        }
+        tx_ids
+            .into_iter()
+            .for_each(|tx_id| state.add_known_payload(&tx_id));
+        RelayAction::Success
+    }
+
     /// Fetch a bunch of address metadata since the given timestamp and address.
     pub async fn fetch_range_since(
         &self,
@@ -234,7 +298,7 @@ impl Peer {
 }
 
 impl PeerState {
-    fn add_known_payload(&mut self, payload_hash: &[u8]) {
+    fn add_known_payload(&mut self, payload_id: &[u8]) {
         if self.filters.is_empty() || self.max_filter_items == self.cur_num_items {
             self.cur_num_items = 0;
             self.filters.insert(
@@ -245,13 +309,13 @@ impl PeerState {
         if self.filters.len() > self.max_filters {
             self.filters.pop();
         }
-        self.filters[0].insert(&payload_hash);
+        self.filters[0].insert(&payload_id);
         self.cur_num_items += 1;
     }
 
-    fn knows_payload(&self, payload_hash: &[u8]) -> bool {
+    fn knows_payload(&self, payload_id: &[u8]) -> bool {
         for filter in &self.filters {
-            if filter.contains(&payload_hash) {
+            if filter.contains(&payload_id) {
                 return true;
             }
         }

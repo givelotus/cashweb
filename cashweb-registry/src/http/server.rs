@@ -48,6 +48,17 @@ pub struct PutMetadataRequest {
     pub signed_metadata: cashweb_payload::proto::SignedPayload,
 }
 
+/// Relevant parts of an HTTP request to put new broadcast messages.
+#[derive(Debug, Clone)]
+pub struct PutMessageRequest {
+    /// HTTP headers of the PUT request.
+    pub header_map: HeaderMap,
+    /// Signed serialized [`proto::AddressMetadata`] payload.
+    pub signed_message: cashweb_payload::proto::SignedPayload,
+    /// TX ids involved in this particular instance of the message
+    pub tx_ids: Vec<Vec<u8>>,
+}
+
 /// Errors indicating invalid requests being sent to the Registry endpoint.
 #[derive(Debug, Error, ErrorMeta)]
 pub enum RegistryServerError {
@@ -312,14 +323,26 @@ async fn handle_get_message(
 async fn handle_put_message(
     Protobuf(message): Protobuf<cashweb_payload::proto::SignedPayload>,
     Extension(server): Extension<RegistryServer>,
+    header_map: HeaderMap,
 ) -> Result<Protobuf<proto::PutSignedPayloadResponse>, HttpRegistryError> {
     let result = server.registry.put_message(&message).await?;
+    let tx_ids: Vec<Vec<u8>> = result
+        .txids
+        .into_iter()
+        .map(|txid| txid.as_slice().to_vec())
+        .collect();
+    let request = PutMessageRequest {
+        header_map,
+        signed_message: message,
+        tx_ids: tx_ids.clone(),
+    };
+    let relay_info = RelayInfo::parse_from_headers(&request.header_map)?;
 
-    Ok(Protobuf(proto::PutSignedPayloadResponse {
-        txid: result
-            .txids
-            .into_iter()
-            .map(|txid| txid.as_slice().to_vec())
-            .collect(),
-    }))
+    // Relay to peers in a separate task
+    tokio::spawn({
+        let peers = Arc::clone(&server.peers);
+        async move { peers.relay_message(&relay_info, &request).await }
+    });
+
+    Ok(Protobuf(proto::PutSignedPayloadResponse { txid: tx_ids }))
 }
