@@ -132,6 +132,7 @@ async fn test_registry_http() -> Result<()> {
 
     // Build valid request
     let address_metadata = proto::AddressMetadata {
+        pubkey: pubkey.array().to_vec(),
         timestamp: 1234,
         ttl: 10,
         entries: vec![],
@@ -162,11 +163,7 @@ async fn test_registry_http() -> Result<()> {
             TxBuilderOutput::Leftover(address.script().clone()),
             TxBuilderOutput::Fixed(TxOutput {
                 value: burn_amount,
-                script: build_commitment_script(
-                    ADDRESS_METADATA_LOKAD_ID,
-                    pubkey.array(),
-                    &payload_hash,
-                ),
+                script: build_commitment_script(ADDRESS_METADATA_LOKAD_ID, &payload_hash),
             }),
         ],
         lock_time: 0,
@@ -642,11 +639,7 @@ fn build_signed_message<T: prost::Message + Default>(
             TxBuilderOutput::Leftover(address.script().clone()),
             TxBuilderOutput::Fixed(TxOutput {
                 value: burn_amount,
-                script: build_commitment_script(
-                    BROADCAST_MESSAGE_LOKAD_ID,
-                    pubkey.array(),
-                    &payload_hash,
-                ),
+                script: build_commitment_script(BROADCAST_MESSAGE_LOKAD_ID, &payload_hash),
             }),
         ],
         lock_time: 0,

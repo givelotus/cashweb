@@ -183,6 +183,7 @@ mod tests {
         assert_eq!(db.metadata().get_latest()?, None);
 
         let mut address_metadata = proto::AddressMetadata {
+            pubkey: vec![2; 33],
             timestamp: 1234,
             ttl: 10,
             entries: vec![],
@@ -306,6 +307,7 @@ mod tests {
         for i in 0u8..50 {
             let pkh = PubKeyHash::new(PkhAlgorithm::Sha256Ripemd160, [i / 2; 20].into())?;
             let address_metadata = proto::AddressMetadata {
+                pubkey: vec![2; 33],
                 timestamp: 1000 + i as i64,
                 ttl: 10,
                 entries: vec![],

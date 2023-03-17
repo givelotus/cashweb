@@ -1,8 +1,8 @@
 //! Module for verifying a [`crate::payload::SignedPayload`] is valid.
 
 use bitcoinsuite_core::{
-    ecc::{Ecc, VerifySignatureError, PUBKEY_LENGTH},
-    Bytes, BytesMut, Hashed, Op, Script, Sha256,
+    ecc::{Ecc, VerifySignatureError},
+    Bytes, Hashed, Op, Script, Sha256,
 };
 use bitcoinsuite_error::{ErrorMeta, Result, WrapErr};
 use thiserror::Error;
@@ -98,12 +98,11 @@ impl<T> SignedPayload<T> {
     /// `OP_RETURN <lokad_id: STMP> <version: 1> <commitment: 32 bytes>`
     pub fn verify(&self, ecc: &impl Ecc, commitment_id: [u8; 4]) -> Result<()> {
         // Verify OP_RETURN commitments
-        let expected_commitment = calc_commitment(self.pubkey, &self.payload_hash);
         for (idx, burn_tx) in self.burn_txs.iter().enumerate() {
             let parsed_commitment = parse_commitment(commitment_id, &burn_tx.burn_output.script)?;
-            if expected_commitment != parsed_commitment {
+            if self.payload_hash != parsed_commitment {
                 return Err(BurnOutputCommitmentMismatch {
-                    expected: expected_commitment,
+                    expected: self.payload_hash.clone(),
                     actual: parsed_commitment,
                     burn_tx_idx: idx,
                 }
@@ -130,12 +129,8 @@ impl<T> SignedPayload<T> {
 }
 
 /// Build the burn [`bitcoinsuite_core::Script`] for the given pubkey and payload hash.
-pub fn build_commitment_script(
-    commitment_id: [u8; 4],
-    pubkey_raw: [u8; PUBKEY_LENGTH],
-    payload_hash: &Sha256,
-) -> Script {
-    let commitment = calc_commitment(pubkey_raw, payload_hash);
+pub fn build_commitment_script(commitment_id: [u8; 4], payload_hash: &Sha256) -> Script {
+    let commitment = payload_hash;
     Script::from_ops(
         vec![
             Op::Code(0x6a),
@@ -183,14 +178,6 @@ fn parse_commitment(commitment_id: [u8; 4], script: &Script) -> Result<Sha256> {
     Ok(Sha256::new(commitment.as_ref().try_into().unwrap()))
 }
 
-fn calc_commitment(pubkey_raw: [u8; PUBKEY_LENGTH], payload_hash: &Sha256) -> Sha256 {
-    let pubkey_hash = Sha256::digest(pubkey_raw.into());
-    let mut commitment_preimage = BytesMut::new();
-    commitment_preimage.put_byte_array(pubkey_hash.byte_array().clone());
-    commitment_preimage.put_byte_array(payload_hash.byte_array().clone());
-    Sha256::digest(commitment_preimage.freeze())
-}
-
 #[cfg(test)]
 mod tests {
     use bitcoinsuite_core::{
@@ -204,7 +191,6 @@ mod tests {
     use crate::{
         payload::{BurnTx, SignatureScheme, SignedPayload},
         verify::{
-            calc_commitment,
             ValidateSignedPayloadError::{self, *},
             ADDRESS_METADATA_LOKAD_ID,
         },
@@ -222,14 +208,7 @@ mod tests {
         let payload_raw = Bytes::from([1, 2, 3, 4]);
         let payload_hash = Sha256::digest(payload_raw.clone());
         let pubkey = [0x77; PUBKEY_LENGTH];
-        let commitment_hash = Sha256::digest(
-            [
-                Sha256::digest(pubkey.as_slice().into()).as_slice(),
-                payload_hash.as_slice(),
-            ]
-            .concat()
-            .into(),
-        );
+        let commitment_hash = payload_hash.clone();
         let commitment_hash_raw = Bytes::from_slice(commitment_hash.as_slice());
         let commitment_script = Script::from_ops(
             vec![
@@ -389,7 +368,7 @@ mod tests {
         // Fix pubkey (and commitment)
         let seckey = ecc.seckey_from_array([0x44; 32])?;
         let pubkey = ecc.derive_pubkey(&seckey).array();
-        let commitment_hash = calc_commitment(pubkey, &payload_hash);
+        let commitment_hash = payload_hash;
         let commitment_hash_raw = Bytes::from_slice(commitment_hash.as_slice());
         let commitment_script = Script::from_ops(
             vec![
